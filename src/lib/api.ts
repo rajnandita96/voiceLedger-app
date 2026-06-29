@@ -60,17 +60,20 @@ export async function healthCheck(): Promise<boolean> {
 
 /** Submit an audio file for transcription */
 export async function submitAudio(fileUri: string, fileName: string): Promise<JobSubmitResponse> {
+  // Read the file as a blob — works cross-platform (Android doesn't support
+  // React Native's { uri, name, type } FormData append syntax).
+  const fileResponse = await fetch(fileUri);
+  const blob = await fileResponse.blob();
+
   const formData = new FormData();
-  // @ts-expect-error — React Native's FormData supports { uri, name, type } objects
-  formData.append('file', {
-    uri: fileUri,
-    name: fileName,
-    type: 'audio/m4a',
-  });
+  formData.append('file', blob, fileName);
 
   return apiFetch<JobSubmitResponse>('/jobs', {
     method: 'POST',
     body: formData,
+    headers: {
+      // Don't set Content-Type — let fetch set it with the boundary
+    },
   });
 }
 
