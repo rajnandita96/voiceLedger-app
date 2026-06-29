@@ -1,10 +1,17 @@
 /**
  * useTranscription — manages the full record → upload → poll lifecycle.
+ * Uses expo-audio (SDK 56) for recording.
  */
 
-import { useCallback, useRef, useState } from 'react';
-import { Audio } from 'expo-av';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as FileSystem from 'expo-file-system';
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+  requestRecordingPermissionsAsync,
+  RecordingPresets,
+  type AudioRecorder,
+} from 'expo-audio';
 import { submitAudio, pollUntilDone, type JobResult, type JobStatus, ApiError } from '@/lib/api';
 import { addTranscription, type StoredTranscription } from '@/lib/storage';
 
@@ -27,6 +34,20 @@ interface UseTranscriptionReturn {
   reset: () => void;
 }
 
+function formatDuration(millis: number): string {
+  const totalSeconds = Math.floor(millis / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+const recordingOptions = {
+  ...RecordingPresets.HIGH_QUALITY,
+  extension: '.m4a',
+  sampleRate: 44100,
+  numberOfChannels: 1,
+};
+
 export function useTranscription(): UseTranscriptionReturn {
   const [state, setState] = useState<ProcessState>('idle');
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
@@ -34,16 +55,18 @@ export function useTranscription(): UseTranscriptionReturn {
   const [recordingDuration, setRecordingDuration] = useState('0:00');
   const [result, setResult] = useState<StoredTranscription | null>(null);
 
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef<number>(0);
   const abortRef = useRef(false);
+  const startTimeRef = useRef<number>(0);
 
-  const formatDuration = useCallback((seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  }, []);
+  const recorder = useAudioRecorder(recordingOptions);
+  const recorderState = useAudioRecorderState(recorder, 100);
+
+  // Track recording duration from recorder state
+  useEffect(() => {
+    if (state === 'recording' && recorderState.isRecording) {
+      setRecordingDuration(formatDuration(recorderState.durationMillis));
+    }
+  }, [recorderState.durationMillis, recorderState.isRecording, state]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -51,80 +74,36 @@ export function useTranscription(): UseTranscriptionReturn {
       setErrorMessage('');
       setResult(null);
 
-      // Request permissions
-      const perm = await Audio.requestPermissionsAsync();
+      const perm = await requestRecordingPermissionsAsync();
       if (!perm.granted) {
         setErrorMessage('Microphone permission required');
         setState('error');
         return;
       }
 
-      // Configure audio mode
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      // Start recording
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync({
-        android: {
-          extension: '.m4a',
-          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-          audioEncoder: Audio.AndroidAudioEncoder.AAC,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 128000,
-        },
-        ios: {
-          extension: '.m4a',
-          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
-          audioQuality: Audio.IOSAudioQuality.HIGH,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 128000,
-        },
-        web: {
-          mimeType: 'audio/webm',
-          bitsPerSecond: 128000,
-        },
-      });
-
-      await recording.startAsync();
-      recordingRef.current = recording;
+      await recorder.prepareToRecordAsync(recordingOptions);
+      recorder.record();
       startTimeRef.current = Date.now();
+      setRecordingDuration('0:00');
       setState('recording');
-
-      // Update duration timer
-      timerRef.current = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-        setRecordingDuration(formatDuration(elapsed));
-      }, 200);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to start recording');
       setState('error');
     }
-  }, [formatDuration]);
+  }, [recorder]);
 
   const stopRecording = useCallback(async () => {
     try {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-
-      if (!recordingRef.current) return;
-
       setState('uploading');
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
+      await recorder.stop();
 
+      const uri = recorder.uri;
       if (!uri) {
         throw new Error('No recording URI');
       }
 
       const fileName = `recording_${Date.now()}.m4a`;
-      const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
+      const elapsed = Date.now() - startTimeRef.current;
       const duration = formatDuration(elapsed);
 
       // Submit to API
@@ -159,14 +138,17 @@ export function useTranscription(): UseTranscriptionReturn {
       }
     } catch (err) {
       if (!abortRef.current) {
-        const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Unknown error');
+        const msg =
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Unknown error';
         setErrorMessage(msg);
         setState('error');
       }
-    } finally {
-      recordingRef.current = null;
     }
-  }, [formatDuration]);
+  }, [recorder]);
 
   const reset = useCallback(() => {
     abortRef.current = true;
@@ -175,10 +157,6 @@ export function useTranscription(): UseTranscriptionReturn {
     setErrorMessage('');
     setResult(null);
     setRecordingDuration('0:00');
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
   }, []);
 
   return {
