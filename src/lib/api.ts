@@ -4,6 +4,7 @@
  */
 
 import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
+import { logger } from './logger';
 
 const API_BASE = 'https://abhisheks-mac-mini.tail4b195e.ts.net';
 
@@ -65,6 +66,8 @@ export async function healthCheck(): Promise<boolean> {
  * FormData (broken on Android), FileSystem.uploadAsync uses the platform's
  * native networking stack directly. */
 export async function submitAudio(fileUri: string, _fileName: string): Promise<JobSubmitResponse> {
+  logger.info(`Uploading audio: ${fileUri}`, { fileName: _fileName });
+
   const result = await uploadAsync(`${API_BASE}/jobs`, fileUri, {
     httpMethod: 'POST',
     uploadType: FileSystemUploadType.MULTIPART,
@@ -72,16 +75,22 @@ export async function submitAudio(fileUri: string, _fileName: string): Promise<J
     mimeType: 'audio/m4a',
   });
 
+  logger.info(`Upload response: HTTP ${result.status}`, { headers: result.headers });
+
   if (result.status === 429) {
+    logger.warn('Rate limited (429)');
     throw new ApiError('Rate limited. Retry after 60s.', 429);
   }
 
   if (result.status < 200 || result.status >= 300) {
     const body = JSON.parse(result.body);
+    logger.error(`Upload failed: ${body.error ?? 'Unknown'}`, body);
     throw new ApiError(body.error ?? `Upload failed (${result.status})`, result.status);
   }
 
-  return JSON.parse(result.body);
+  const data = JSON.parse(result.body);
+  logger.info(`Job created: ${data.job_id}`, data);
+  return data;
 }
 
 /** Poll a job until it completes */

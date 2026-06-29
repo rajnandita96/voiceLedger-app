@@ -13,6 +13,7 @@ import {
   type AudioRecorder,
 } from 'expo-audio';
 import { submitAudio, pollUntilDone, type JobResult, type JobStatus, ApiError } from '@/lib/api';
+import { logger } from '@/lib/logger';
 import { addTranscription, type StoredTranscription } from '@/lib/storage';
 
 export type ProcessState =
@@ -86,7 +87,9 @@ export function useTranscription(): UseTranscriptionReturn {
       startTimeRef.current = Date.now();
       setRecordingDuration('0:00');
       setState('recording');
+      logger.info('Recording started', { options: recordingOptions });
     } catch (err) {
+      logger.error('Failed to start recording', err);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to start recording');
       setState('error');
     }
@@ -102,13 +105,14 @@ export function useTranscription(): UseTranscriptionReturn {
         throw new Error('No recording URI');
       }
 
-      const fileName = `recording_${Date.now()}.m4a`;
       const elapsed = Date.now() - startTimeRef.current;
       const duration = formatDuration(elapsed);
+      logger.info('Recording stopped', { uri, duration, sizeMs: elapsed });
 
       // Submit to API
       setJobStatus('queued');
-      const { job_id } = await submitAudio(uri, fileName);
+      const submitResult = await submitAudio(uri, `recording_${Date.now()}.m4a`);
+      const job_id = submitResult.job_id;
 
       // Clean up recording file
       deleteAsync(uri, { idempotent: true }).catch(() => {});
@@ -123,6 +127,7 @@ export function useTranscription(): UseTranscriptionReturn {
       if (abortRef.current) return;
 
       if (job.status === 'done' && job.result?.text) {
+        logger.info('Transcription completed', { textLen: job.result.text.length });
         const stored = await addTranscription({
           jobId: job.job_id,
           text: job.result.text,
@@ -133,11 +138,13 @@ export function useTranscription(): UseTranscriptionReturn {
         setResult(stored);
         setState('done');
       } else if (job.status === 'failed') {
+        logger.error('Transcription failed', { error: job.error });
         setErrorMessage(job.error || 'Transcription failed');
         setState('error');
       }
     } catch (err) {
       if (!abortRef.current) {
+        logger.error('Transcription pipeline error', err);
         const msg =
           err instanceof ApiError
             ? err.message
