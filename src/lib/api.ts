@@ -3,10 +3,19 @@
  * Communicates with the whisper-gateway transcription backend
  */
 
+import { Platform } from 'react-native';
 import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 import { logger } from './logger';
 
-const API_BASE = 'https://abhisheks-mac-mini.tail4b195e.ts.net';
+// Android emulator uses 10.0.2.2 to reach host machine's localhost.
+// iOS simulator and physical devices need the actual URL.
+// Override by setting the API_URL env var or changing this value.
+const API_BASE: string = __DEV__
+  ? Platform.select({
+      android: 'http://10.0.2.2:9090',
+      default: 'http://localhost:9090',
+    }) ?? 'http://localhost:9090'
+  : 'https://abhisheks-mac-mini.tail4b195e.ts.net';
 
 export interface JobSubmitResponse {
   job_id: string;
