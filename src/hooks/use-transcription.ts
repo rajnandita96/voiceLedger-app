@@ -10,6 +10,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
   requestRecordingPermissionsAsync,
+  setAudioModeAsync,
   RecordingPresets,
   type AudioRecorder,
 } from 'expo-audio';
@@ -82,6 +83,12 @@ export function useTranscription(): UseTranscriptionReturn {
         setState('error');
         return;
       }
+
+      // Required on iOS before recording
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
 
       await recorder.prepareToRecordAsync(recordingOptions);
       recorder.record();
