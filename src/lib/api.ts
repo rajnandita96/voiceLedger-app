@@ -58,22 +58,51 @@ export async function healthCheck(): Promise<boolean> {
   }
 }
 
-/** Submit an audio file for transcription */
-export async function submitAudio(fileUri: string, fileName: string): Promise<JobSubmitResponse> {
-  // Read the file as a blob — works cross-platform (Android doesn't support
-  // React Native's { uri, name, type } FormData append syntax).
-  const fileResponse = await fetch(fileUri);
-  const blob = await fileResponse.blob();
+/** Submit an audio file for transcription. Uses XMLHttpRequest because
+ * React Native's fetch Blob support is broken on Android (ArrayBuffer not
+ * supported) while XHR handles FormData + file URIs natively on both platforms. */
+export function submitAudio(fileUri: string, fileName: string): Promise<JobSubmitResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const url = `${API_BASE}/jobs`;
 
-  const formData = new FormData();
-  formData.append('file', blob, fileName);
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Accept', 'application/json');
 
-  return apiFetch<JobSubmitResponse>('/jobs', {
-    method: 'POST',
-    body: formData,
-    headers: {
-      // Don't set Content-Type — let fetch set it with the boundary
-    },
+    xhr.onload = () => {
+      if (xhr.status === 429) {
+        const retryAfter = parseInt(xhr.getResponseHeader('Retry-After') ?? '60', 10);
+        reject(new ApiError(`Rate limited. Retry after ${retryAfter}s.`, 429));
+        return;
+      }
+      if (!xhr.responseText) {
+        reject(new ApiError('Empty response', xhr.status));
+        return;
+      }
+      try {
+        const json = JSON.parse(xhr.responseText);
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(json);
+        } else {
+          reject(new ApiError(json.error ?? 'Upload failed', xhr.status));
+        }
+      } catch {
+        reject(new ApiError('Invalid JSON response', xhr.status));
+      }
+    };
+
+    xhr.onerror = () => reject(new ApiError('Network error', 0));
+    xhr.ontimeout = () => reject(new ApiError('Upload timed out', 408));
+    xhr.timeout = 120_000; // 2 minutes for large files
+
+    const formData = new FormData();
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: 'audio/m4a',
+    } as any);
+
+    xhr.send(formData);
   });
 }
 
