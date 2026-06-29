@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { deleteAsync } from 'expo-file-system/legacy';
+import { deleteAsync, copyAsync, documentDirectory, cacheDirectory } from 'expo-file-system/legacy';
 import {
   useAudioRecorder,
   useAudioRecorderState,
@@ -109,13 +109,22 @@ export function useTranscription(): UseTranscriptionReturn {
       const duration = formatDuration(elapsed);
       logger.info('Recording stopped', { uri, duration, sizeMs: elapsed });
 
+      // Copy recording to a location that uploadAsync can read.
+      // expo-audio saves to its own cache dir which uploadAsync may not
+      // be able to access on Android (especially in Expo Go).
+      const safeFileName = `upload_${Date.now()}.m4a`;
+      const safeUri = `${documentDirectory ?? cacheDirectory}${safeFileName}`;
+      await copyAsync({ from: uri, to: safeUri });
+      logger.info('Copied recording for upload', { from: uri, to: safeUri });
+
       // Submit to API
       setJobStatus('queued');
-      const submitResult = await submitAudio(uri, `recording_${Date.now()}.m4a`);
+      const submitResult = await submitAudio(safeUri, safeFileName);
       const job_id = submitResult.job_id;
 
-      // Clean up recording file
+      // Clean up both files
       deleteAsync(uri, { idempotent: true }).catch(() => {});
+      deleteAsync(safeUri, { idempotent: true }).catch(() => {});
 
       // Poll for result
       setState('polling');
