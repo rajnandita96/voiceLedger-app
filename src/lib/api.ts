@@ -3,6 +3,8 @@
  * Communicates with the whisper-gateway transcription backend
  */
 
+import { File, UploadType } from 'expo-file-system';
+
 const API_BASE = 'https://abhisheks-mac-mini.tail4b195e.ts.net';
 
 export interface JobSubmitResponse {
@@ -58,52 +60,28 @@ export async function healthCheck(): Promise<boolean> {
   }
 }
 
-/** Submit an audio file for transcription. Uses XMLHttpRequest because
- * React Native's fetch Blob support is broken on Android (ArrayBuffer not
- * supported) while XHR handles FormData + file URIs natively on both platforms. */
-export function submitAudio(fileUri: string, fileName: string): Promise<JobSubmitResponse> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const url = `${API_BASE}/jobs`;
+/** Submit an audio file for transcription. Uses expo-file-system's native
+ * multipart upload which works reliably on both iOS and Android — unlike
+ * React Native's FormData/Blob which have platform-specific issues. */
+export async function submitAudio(fileUri: string, fileName: string): Promise<JobSubmitResponse> {
+  const file = new File(fileUri);
 
-    xhr.open('POST', url);
-    xhr.setRequestHeader('Accept', 'application/json');
-
-    xhr.onload = () => {
-      if (xhr.status === 429) {
-        const retryAfter = parseInt(xhr.getResponseHeader('Retry-After') ?? '60', 10);
-        reject(new ApiError(`Rate limited. Retry after ${retryAfter}s.`, 429));
-        return;
-      }
-      if (!xhr.responseText) {
-        reject(new ApiError('Empty response', xhr.status));
-        return;
-      }
-      try {
-        const json = JSON.parse(xhr.responseText);
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(json);
-        } else {
-          reject(new ApiError(json.error ?? 'Upload failed', xhr.status));
-        }
-      } catch {
-        reject(new ApiError('Invalid JSON response', xhr.status));
-      }
-    };
-
-    xhr.onerror = () => reject(new ApiError('Network error', 0));
-    xhr.ontimeout = () => reject(new ApiError('Upload timed out', 408));
-    xhr.timeout = 120_000; // 2 minutes for large files
-
-    const formData = new FormData();
-    formData.append('file', {
-      uri: fileUri,
-      name: fileName,
-      type: 'audio/m4a',
-    } as any);
-
-    xhr.send(formData);
+  const result = await file.upload(`${API_BASE}/jobs`, {
+    uploadType: UploadType.MULTIPART,
+    fieldName: 'file',
+    mimeType: 'audio/m4a',
   });
+
+  if (result.status === 429) {
+    throw new ApiError('Rate limited. Retry after 60s.', 429);
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    const body = JSON.parse(result.body);
+    throw new ApiError(body.error ?? `Upload failed (${result.status})`, result.status);
+  }
+
+  return JSON.parse(result.body);
 }
 
 /** Poll a job until it completes */
