@@ -12,6 +12,7 @@ import {
   setAudioModeAsync,
   RecordingPresets,
 } from 'expo-audio';
+import { Platform } from 'react-native';
 import { logger } from '@/lib/logger';
 import { useTranscriptionJobs } from '@/lib/transcription-jobs';
 
@@ -38,12 +39,27 @@ function formatDuration(millis: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-const recordingOptions = {
-  ...RecordingPresets.HIGH_QUALITY,
-  extension: '.m4a',
-  sampleRate: 44100,
-  numberOfChannels: 1,
-};
+// Android: record at 16kHz mono AAC — whisper expects 16kHz, and ffmpeg
+// resampling from 44.1kHz can introduce artifacts on some Android encoders.
+// iOS: HIGH_QUALITY preset (iOS AAC encoder is reliable at any sample rate).
+const recordingOptions = Platform.select({
+  android: {
+    extension: '.m4a',
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 64000,
+    android: {
+      outputFormat: 'mpeg4' as const,
+      audioEncoder: 'aac' as const,
+    },
+    ios: RecordingPresets.HIGH_QUALITY.ios,
+    web: RecordingPresets.HIGH_QUALITY.web,
+  },
+  default: {
+    ...RecordingPresets.HIGH_QUALITY,
+    numberOfChannels: 1,
+  },
+})!
 
 export function useTranscription(): UseTranscriptionReturn {
   const [state, setState] = useState<ProcessState>('idle');
