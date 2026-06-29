@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as FileSystem from 'expo-file-system';
+import { deleteAsync } from 'expo-file-system/legacy';
 import {
   useAudioRecorder,
   useAudioRecorderState,
@@ -111,7 +111,7 @@ export function useTranscription(): UseTranscriptionReturn {
       const { job_id } = await submitAudio(uri, fileName);
 
       // Clean up recording file
-      FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+      deleteAsync(uri, { idempotent: true }).catch(() => {});
 
       // Poll for result
       setState('polling');

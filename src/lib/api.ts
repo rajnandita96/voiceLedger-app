@@ -3,7 +3,7 @@
  * Communicates with the whisper-gateway transcription backend
  */
 
-import { File, UploadType } from 'expo-file-system';
+import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 
 const API_BASE = 'https://abhisheks-mac-mini.tail4b195e.ts.net';
 
@@ -60,14 +60,14 @@ export async function healthCheck(): Promise<boolean> {
   }
 }
 
-/** Submit an audio file for transcription. Uses expo-file-system's native
- * multipart upload which works reliably on both iOS and Android — unlike
- * React Native's FormData/Blob which have platform-specific issues. */
-export async function submitAudio(fileUri: string, fileName: string): Promise<JobSubmitResponse> {
-  const file = new File(fileUri);
-
-  const result = await file.upload(`${API_BASE}/jobs`, {
-    uploadType: UploadType.MULTIPART,
+/** Submit an audio file for transcription. Uses expo-file-system's legacy
+ * uploadAsync which is battle-tested on both platforms. Unlike React Native's
+ * FormData (broken on Android), FileSystem.uploadAsync uses the platform's
+ * native networking stack directly. */
+export async function submitAudio(fileUri: string, _fileName: string): Promise<JobSubmitResponse> {
+  const result = await uploadAsync(`${API_BASE}/jobs`, fileUri, {
+    httpMethod: 'POST',
+    uploadType: FileSystemUploadType.MULTIPART,
     fieldName: 'file',
     mimeType: 'audio/m4a',
   });
