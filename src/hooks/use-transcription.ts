@@ -4,7 +4,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { deleteAsync } from 'expo-file-system/legacy';
+import { deleteAsync, readAsStringAsync, writeAsStringAsync, documentDirectory } from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 import {
   useAudioRecorder,
   useAudioRecorderState,
@@ -109,13 +110,37 @@ export function useTranscription(): UseTranscriptionReturn {
       const duration = formatDuration(elapsed);
       logger.info('Recording stopped', { uri, duration, sizeMs: elapsed });
 
-      // Submit to API
+      // Submit to API. On dev builds, uploadAsync can read the file directly.
+      // In Expo Go, the expo-audio cache is sandboxed — copy to doc dir first.
       setJobStatus('queued');
-      const submitResult = await submitAudio(uri, `recording_${Date.now()}.m4a`);
+      let uploadUri = uri;
+
+      if (Platform.OS === 'android' && uri.includes('host.exp.exponent')) {
+        // Expo Go workaround: read via fetch (not expo-file-system which is sandboxed)
+        try {
+          const destDir = documentDirectory;
+          if (destDir) {
+            const response = await fetch(uri);
+            const buffer = await response.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            const destUri = `${destDir}upload_${Date.now()}.m4a`;
+            await writeAsStringAsync(destUri, btoa(binary), { encoding: 'base64' });
+            uploadUri = destUri;
+            logger.info('Expo Go: copied recording for upload', { size: bytes.length });
+          }
+        } catch (e) {
+          logger.warn('Expo Go copy fallback failed, trying direct upload', e);
+        }
+      }
+
+      const submitResult = await submitAudio(uploadUri, `recording_${Date.now()}.m4a`);
       const job_id = submitResult.job_id;
 
-      // Clean up recording file after upload
+      // Clean up
       deleteAsync(uri, { idempotent: true }).catch(() => {});
+      if (uploadUri !== uri) deleteAsync(uploadUri, { idempotent: true }).catch(() => {});
 
       // Poll for result
       setState('polling');
