@@ -1,39 +1,33 @@
 /**
- * useTranscription — manages the full record → upload → poll lifecycle.
- * Uses expo-audio (SDK 56) for recording.
+ * useTranscription — lightweight hook: handles recording only.
+ * The upload + polling pipeline runs in the global TranscriptionJobs store
+ * so it survives closing the record modal.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { deleteAsync, readAsStringAsync, writeAsStringAsync, documentDirectory } from 'expo-file-system/legacy';
-import { Platform } from 'react-native';
 import {
   useAudioRecorder,
   useAudioRecorderState,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   RecordingPresets,
-  type AudioRecorder,
 } from 'expo-audio';
-import { submitAudio, pollUntilDone, type JobResult, type JobStatus, ApiError } from '@/lib/api';
 import { logger } from '@/lib/logger';
-import { addTranscription, type StoredTranscription } from '@/lib/storage';
+import { useTranscriptionJobs } from '@/lib/transcription-jobs';
 
 export type ProcessState =
   | 'idle'
   | 'recording'
   | 'uploading'
-  | 'polling'
-  | 'done'
-  | 'error';
+  | 'done';
 
 interface UseTranscriptionReturn {
   state: ProcessState;
-  jobStatus: JobStatus | null;
   errorMessage: string;
   recordingDuration: string;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
-  result: StoredTranscription | null;
+  resultText: string;
   reset: () => void;
 }
 
@@ -53,18 +47,16 @@ const recordingOptions = {
 
 export function useTranscription(): UseTranscriptionReturn {
   const [state, setState] = useState<ProcessState>('idle');
-  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [recordingDuration, setRecordingDuration] = useState('0:00');
-  const [result, setResult] = useState<StoredTranscription | null>(null);
+  const [resultText, setResultText] = useState('');
+  const { submitJob } = useTranscriptionJobs();
 
-  const abortRef = useRef(false);
   const startTimeRef = useRef<number>(0);
 
   const recorder = useAudioRecorder(recordingOptions);
   const recorderState = useAudioRecorderState(recorder, 100);
 
-  // Track recording duration from recorder state
   useEffect(() => {
     if (state === 'recording' && recorderState.isRecording) {
       setRecordingDuration(formatDuration(recorderState.durationMillis));
@@ -73,33 +65,21 @@ export function useTranscription(): UseTranscriptionReturn {
 
   const startRecording = useCallback(async () => {
     try {
-      abortRef.current = false;
       setErrorMessage('');
-      setResult(null);
-
+      setResultText('');
       const perm = await requestRecordingPermissionsAsync();
       if (!perm.granted) {
         setErrorMessage('Microphone permission required');
-        setState('error');
         return;
       }
-
-      // Required on iOS before recording
-      await setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-      });
-
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync(recordingOptions);
       recorder.record();
       startTimeRef.current = Date.now();
       setRecordingDuration('0:00');
       setState('recording');
-      logger.info('Recording started', { options: recordingOptions });
     } catch (err) {
-      logger.error('Failed to start recording', err);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to start recording');
-      setState('error');
     }
   }, [recorder]);
 
@@ -107,105 +87,27 @@ export function useTranscription(): UseTranscriptionReturn {
     try {
       setState('uploading');
       await recorder.stop();
-
       const uri = recorder.uri;
-      if (!uri) {
-        throw new Error('No recording URI');
-      }
-
+      if (!uri) throw new Error('No recording URI');
       const elapsed = Date.now() - startTimeRef.current;
       const duration = formatDuration(elapsed);
-      logger.info('Recording stopped', { uri, duration, sizeMs: elapsed });
-
-      // Submit to API. On dev builds, uploadAsync can read the file directly.
-      // In Expo Go, the expo-audio cache is sandboxed — copy to doc dir first.
-      setJobStatus('queued');
-      let uploadUri = uri;
-
-      if (Platform.OS === 'android' && uri.includes('host.exp.exponent')) {
-        // Expo Go workaround: read via fetch (not expo-file-system which is sandboxed)
-        try {
-          const destDir = documentDirectory;
-          if (destDir) {
-            const response = await fetch(uri);
-            const buffer = await response.arrayBuffer();
-            const bytes = new Uint8Array(buffer);
-            let binary = '';
-            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-            const destUri = `${destDir}upload_${Date.now()}.m4a`;
-            await writeAsStringAsync(destUri, btoa(binary), { encoding: 'base64' });
-            uploadUri = destUri;
-            logger.info('Expo Go: copied recording for upload', { size: bytes.length });
-          }
-        } catch (e) {
-          logger.warn('Expo Go copy fallback failed, trying direct upload', e);
-        }
-      }
-
-      const submitResult = await submitAudio(uploadUri, `recording_${Date.now()}.m4a`);
-      const job_id = submitResult.job_id;
-
-      // Clean up
-      deleteAsync(uri, { idempotent: true }).catch(() => {});
-      if (uploadUri !== uri) deleteAsync(uploadUri, { idempotent: true }).catch(() => {});
-
-      // Poll for result
-      setState('polling');
-      const job = await pollUntilDone(job_id, (status) => {
-        if (abortRef.current) return;
-        setJobStatus(status);
-      });
-
-      if (abortRef.current) return;
-
-      if (job.status === 'done' && job.result?.text) {
-        logger.info('Transcription completed', { textLen: job.result.text.length });
-        const stored = await addTranscription({
-          jobId: job.job_id,
-          text: job.result.text,
-          fileName: job.filename,
-          duration,
-          status: 'done',
-        });
-        setResult(stored);
-        setState('done');
-      } else if (job.status === 'failed') {
-        logger.error('Transcription failed', { error: job.error });
-        setErrorMessage(job.error || 'Transcription failed');
-        setState('error');
-      }
+      logger.info('Recording stopped, dispatching to job queue', { uri, duration });
+      const fileName = `recording_${Date.now()}.m4a`;
+      // Fire-and-forget: the job runs in the global store
+      submitJob(uri, fileName, duration);
+      setResultText('');
+      setState('done');
     } catch (err) {
-      if (!abortRef.current) {
-        logger.error('Transcription pipeline error', err);
-        const msg =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : 'Unknown error';
-        setErrorMessage(msg);
-        setState('error');
-      }
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to stop recording');
     }
-  }, [recorder]);
+  }, [recorder, submitJob]);
 
   const reset = useCallback(() => {
-    abortRef.current = true;
     setState('idle');
-    setJobStatus(null);
     setErrorMessage('');
-    setResult(null);
+    setResultText('');
     setRecordingDuration('0:00');
   }, []);
 
-  return {
-    state,
-    jobStatus,
-    errorMessage,
-    recordingDuration,
-    startRecording,
-    stopRecording,
-    result,
-    reset,
-  };
+  return { state, errorMessage, recordingDuration, startRecording, stopRecording, resultText, reset };
 }

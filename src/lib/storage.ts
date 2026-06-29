@@ -10,7 +10,7 @@ export interface StoredTranscription {
   text: string;
   fileName: string;
   duration: string;
-  status: 'done' | 'failed';
+  status: 'queued' | 'processing' | 'done' | 'failed';
   error?: string;
   createdAt: string;
 }
@@ -45,7 +45,7 @@ export async function addTranscription(data: {
   text: string;
   fileName: string;
   duration: string;
-  status: 'done' | 'failed';
+  status: StoredTranscription['status'];
   error?: string;
 }): Promise<StoredTranscription> {
   const id = await getNextId();
@@ -60,6 +60,18 @@ export async function addTranscription(data: {
   await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(history));
 
   return entry;
+}
+
+export async function updateTranscription(
+  id: string,
+  updates: Partial<Pick<StoredTranscription, 'jobId' | 'status' | 'text' | 'error'>>,
+): Promise<void> {
+  const history = await getHistory();
+  const index = history.findIndex((t) => t.id === id);
+  if (index !== -1) {
+    history[index] = { ...history[index], ...updates };
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  }
 }
 
 export async function deleteTranscription(id: string): Promise<void> {

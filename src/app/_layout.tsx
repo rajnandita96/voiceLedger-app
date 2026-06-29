@@ -18,6 +18,7 @@ import {
   JetBrainsMono_400Regular,
 } from '@expo-google-fonts/jetbrains-mono';
 import { GlassColors } from '@/constants/glass-theme';
+import { TranscriptionJobsProvider } from '@/lib/transcription-jobs';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -42,7 +43,7 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <TranscriptionJobsProvider>
       <StatusBar style="light" />
       <Stack
         screenOptions={{
@@ -68,6 +69,6 @@ export default function RootLayout() {
           }}
         />
       </Stack>
-    </>
+    </TranscriptionJobsProvider>
   );
 }

@@ -62,6 +62,12 @@ export function TranscriptItem({ transcription, onPress, onDelete }: TranscriptI
           </Text>
         )}
 
+        {(status === 'queued' || status === 'processing') && (
+          <Text style={styles.pending} numberOfLines={1}>
+            {status === 'queued' ? '⏳ Waiting in queue...' : '🔄 Transcribing your audio...'}
+          </Text>
+        )}
+
         {status === 'failed' && (
           <Text style={styles.error} numberOfLines={2}>
             {error ?? 'Transcription failed'}
@@ -112,6 +118,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: GlassColors.textMain,
     opacity: 0.85,
+  },
+  pending: {
+    fontFamily: 'Outfit_300Light',
+    fontSize: 14,
+    lineHeight: 20,
+    color: GlassColors.primary,
+    opacity: 0.7,
   },
   error: {
     fontFamily: 'Outfit_300Light',

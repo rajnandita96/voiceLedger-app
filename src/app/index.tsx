@@ -3,7 +3,7 @@
  * Shows recent transcriptions in glass cards with a floating record button.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -20,12 +20,15 @@ import { TranscriptItem } from '@/components/transcript-item';
 import { useRecordings } from '@/hooks/use-recordings';
 import { GlassColors, GlassSpacing, GlassTypography, GlassRadius } from '@/constants/glass-theme';
 import { healthCheck } from '@/lib/api';
+import { useTranscriptionJobs } from '@/lib/transcription-jobs';
 
 export default function Dashboard() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { recordings, loading, refresh, remove } = useRecordings();
+  const { jobs: activeJobs } = useTranscriptionJobs();
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+  const seenJobsRef = useRef<Set<string>>(new Set());
 
   // Refresh list on focus and check API health
   useFocusEffect(
@@ -34,6 +37,13 @@ export default function Dashboard() {
       healthCheck().then(setApiOnline).catch(() => setApiOnline(false));
     }, [refresh]),
   );
+
+  // Auto-refresh while active jobs exist (so new completions show up)
+  useEffect(() => {
+    if (activeJobs.length === 0) return;
+    const interval = setInterval(() => refresh(), 3000);
+    return () => clearInterval(interval);
+  }, [activeJobs.length, refresh]);
 
   const renderEmpty = () => (
     <View style={styles.empty}>
@@ -67,6 +77,23 @@ export default function Dashboard() {
           <Text style={styles.apiText}>
             {apiOnline ? 'API Online' : 'API Offline'}
           </Text>
+        </View>
+      )}
+      {/* Active transcription jobs */}
+      {activeJobs.length > 0 && (
+        <View style={styles.activeJobs}>
+          <Text style={styles.activeJobsTitle}>Active Jobs</Text>
+          {activeJobs.map((job) => (
+            <View key={job.localId} style={styles.activeJobRow}>
+              <ActivityIndicator size="small" color={GlassColors.primary} />
+              <View style={styles.activeJobInfo}>
+                <Text style={styles.activeJobName} numberOfLines={1}>{job.fileName}</Text>
+                <Text style={styles.activeJobStatus}>
+                  {job.status === 'submitting' ? 'Uploading...' : job.status === 'queued' ? 'In queue' : 'Transcribing...'}
+                </Text>
+              </View>
+            </View>
+          ))}
         </View>
       )}
     </View>
@@ -213,5 +240,38 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: GlassSpacing.lg,
     alignItems: 'center',
+  },
+  activeJobs: {
+    marginTop: GlassSpacing.md,
+    padding: GlassSpacing.md,
+    backgroundColor: 'rgba(255,215,115,0.06)',
+    borderRadius: GlassRadius.md,
+    gap: GlassSpacing.sm,
+  },
+  activeJobsTitle: {
+    fontFamily: 'Outfit_500Medium',
+    fontSize: 11,
+    color: GlassColors.textMuted,
+    letterSpacing: 0.04,
+    textTransform: 'uppercase',
+  },
+  activeJobRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GlassSpacing.sm,
+  },
+  activeJobInfo: {
+    flex: 1,
+  },
+  activeJobName: {
+    fontFamily: 'Outfit_500Medium',
+    fontSize: 13,
+    color: GlassColors.textMain,
+  },
+  activeJobStatus: {
+    fontFamily: 'Outfit_300Light',
+    fontSize: 12,
+    color: GlassColors.primary,
+    marginTop: 2,
   },
 });
