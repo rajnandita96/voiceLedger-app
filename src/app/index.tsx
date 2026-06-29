@@ -3,7 +3,7 @@
  * Shows recent transcriptions in glass cards with a floating record button.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -28,7 +28,7 @@ export default function Dashboard() {
   const { recordings, loading, refresh, remove } = useRecordings();
   const { jobs: activeJobs } = useTranscriptionJobs();
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
-  const seenJobsRef = useRef<Set<string>>(new Set());
+  const [refreshing, setRefreshing] = useState(false);
 
   // Refresh list on focus and check API health
   useFocusEffect(
@@ -38,12 +38,11 @@ export default function Dashboard() {
     }, [refresh]),
   );
 
-  // Auto-refresh while active jobs exist (so new completions show up)
-  useEffect(() => {
-    if (activeJobs.length === 0) return;
-    const interval = setInterval(() => refresh(), 3000);
-    return () => clearInterval(interval);
-  }, [activeJobs.length, refresh]);
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refresh();
+    setRefreshing(false);
+  }, [refresh]);
 
   const renderEmpty = () => (
     <View style={styles.empty}>
@@ -104,6 +103,8 @@ export default function Dashboard() {
       <FlatList
         data={recordings}
         keyExtractor={(item) => item.id}
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
         renderItem={({ item }) => (
           <TranscriptItem
             transcription={item}
