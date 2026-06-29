@@ -185,32 +185,45 @@ export default function RecordScreen() {
 
 function DebugLogPanel() {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const entries = logger.getEntries();
 
   if (entries.length === 0) return null;
 
   const lastEntry = entries[0];
 
+  const handleCopy = () => {
+    const text = logger.dump();
+    Clipboard.setStringAsync(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <View style={debugStyles.container}>
-      <TouchableOpacity
-        style={debugStyles.toggle}
-        onPress={() => setExpanded(!expanded)}
-      >
-        <Text style={debugStyles.toggleText}>
-          {expanded ? '▼' : '▶'} Debug ({entries.length})
-        </Text>
-        <Text style={debugStyles.lastMsg} numberOfLines={1}>
-          {lastEntry.level.toUpperCase()}: {lastEntry.message}
-        </Text>
-      </TouchableOpacity>
+      <View style={debugStyles.header}>
+        <TouchableOpacity
+          style={debugStyles.toggle}
+          onPress={() => setExpanded(!expanded)}
+        >
+          <Text style={debugStyles.toggleText}>
+            {expanded ? '▼' : '▶'} Debug ({entries.length})
+          </Text>
+          <Text style={debugStyles.lastMsg} numberOfLines={1}>
+            {lastEntry.level.toUpperCase()}: {lastEntry.message}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={debugStyles.copyBtn} onPress={handleCopy}>
+          <Text style={debugStyles.copyBtnText}>
+            {copied ? 'Copied!' : 'Copy All'}
+          </Text>
+        </TouchableOpacity>
+      </View>
       {expanded && (
         <ScrollView style={debugStyles.logList}>
-          {entries.map((e, i) => (
-            <Text key={i} style={[debugStyles.logEntry, debugStyles[`level${e.level}`] as any]}>
-              [{e.timestamp}] {e.level.toUpperCase()} {e.message}
-            </Text>
-          ))}
+          <Text style={debugStyles.logText} selectable>
+            {logger.dump()}
+          </Text>
         </ScrollView>
       )}
     </View>
@@ -224,11 +237,15 @@ const debugStyles = StyleSheet.create({
     borderRadius: GlassRadius.sm,
     overflow: 'hidden',
   },
-  toggle: {
+  header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: GlassSpacing.sm,
+  },
+  toggle: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: GlassSpacing.sm,
     paddingVertical: GlassSpacing.xs,
   },
   toggleText: {
@@ -241,23 +258,29 @@ const debugStyles = StyleSheet.create({
     fontSize: 9,
     color: GlassColors.textDim,
     flex: 1,
-    marginLeft: GlassSpacing.sm,
+    marginLeft: GlassSpacing.xs,
+  },
+  copyBtn: {
+    paddingHorizontal: GlassSpacing.sm,
+    paddingVertical: GlassSpacing.xs,
+  },
+  copyBtnText: {
+    fontFamily: 'Outfit_500Medium',
+    fontSize: 10,
+    color: GlassColors.primary,
+    letterSpacing: 0.03,
   },
   logList: {
     maxHeight: 200,
     paddingHorizontal: GlassSpacing.sm,
     paddingBottom: GlassSpacing.sm,
   },
-  logEntry: {
+  logText: {
     fontFamily: 'JetBrainsMono_400Regular',
     fontSize: 9,
     lineHeight: 14,
     color: GlassColors.textDim,
   },
-  leveldebug: { color: GlassColors.textDim },
-  levelinfo: { color: GlassColors.textMuted },
-  levelwarn: { color: GlassColors.primary },
-  levelerror: { color: GlassColors.red },
 });
 
 const styles = StyleSheet.create({
